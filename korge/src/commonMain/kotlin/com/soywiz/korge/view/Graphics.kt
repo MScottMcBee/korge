@@ -8,12 +8,13 @@ import com.soywiz.korim.bitmap.*
 import com.soywiz.korim.color.*
 import com.soywiz.korim.vector.*
 import com.soywiz.korim.vector.paint.*
+import com.soywiz.korma.annotations.*
 import com.soywiz.korma.geom.*
 import com.soywiz.korma.geom.vector.*
 import kotlin.jvm.*
 
-inline fun Container.graphics(autoScaling: Boolean = false, callback: Graphics.() -> Unit = {}): Graphics = Graphics(autoScaling).addTo(this, callback)
-inline fun Container.sgraphics(callback: Graphics.() -> Unit = {}): Graphics = Graphics(autoScaling = true).addTo(this, callback)
+inline fun Container.graphics(autoScaling: Boolean = false, callback: @ViewDslMarker Graphics.() -> Unit = {}): Graphics = Graphics(autoScaling).addTo(this, callback)
+inline fun Container.sgraphics(callback: @ViewDslMarker Graphics.() -> Unit = {}): Graphics = Graphics(autoScaling = true).addTo(this, callback)
 
 open class Graphics @JvmOverloads constructor(
     var autoScaling: Boolean = false
@@ -32,21 +33,36 @@ open class Graphics @JvmOverloads constructor(
     private var hitShapeVersion = -1
     private var hitShapeAnchorVersion = -1
 
-    private val tempVectorPath = VectorPath()
+    private var tempVectorPaths = arrayListOf<VectorPath>()
     private val tempMatrix = Matrix()
-    var customHitShape: VectorPath? = null
+    private var customHitShapes: List<VectorPath>? = null
+
     override var hitShape: VectorPath?
+        set(value) = run { customHitShapes = value?.let { listOf(it) } }
+        get() = hitShapes?.firstOrNull()
+
+    override var hitShapes: List<VectorPath>?
         set(value) {
-            customHitShape = value
+            customHitShapes = value
         }
         get() {
-            if (customHitShape != null) return customHitShape
+            if (customHitShapes != null) return customHitShapes
             if (hitShapeVersion != shapeVersion) {
                 hitShapeVersion = shapeVersion
-                tempVectorPath.clear()
-                tempVectorPath.write(compoundShape.getPath(), tempMatrix.identity())
+                tempVectorPaths.clear()
+
+                // @TODO: Try to combine polygons on KorGE 2.0 to have a single hitShape
+                for (shape in shapes) {
+                    //when (shape) {
+                        //is StyledShape -> shape.path?.let { tempVectorPaths.add(it) }
+                        //else ->
+                            tempVectorPaths.add(shape.getPath())
+                    //}
+                }
             }
-            return tempVectorPath
+
+            //println("AAAAAAAAAAAAAAAA")
+            return tempVectorPaths
         }
 
 	inline fun dirty(callback: () -> Unit): Graphics {
@@ -86,11 +102,11 @@ open class Graphics @JvmOverloads constructor(
 	override fun moveTo(x: Double, y: Double) { currentPath.moveTo(x, y) }
 	override fun quadTo(cx: Double, cy: Double, ax: Double, ay: Double) { currentPath.quadTo(cx, cy, ax, ay) }
 
-    inline fun fill(color: RGBA, alpha: Double = 1.0, callback: () -> Unit) = fill(toColorFill(color, alpha), callback)
+    inline fun fill(color: RGBA, alpha: Double = 1.0, callback: @ViewDslMarker VectorBuilder.() -> Unit) = fill(toColorFill(color, alpha), callback)
     @Deprecated("Kotlin/Native boxes inline+Number")
-    inline fun fill(color: RGBA, alpha: Number, callback: () -> Unit) = fill(color, alpha.toDouble(), callback)
+    inline fun fill(color: RGBA, alpha: Number, callback: @ViewDslMarker VectorBuilder.() -> Unit) = fill(color, alpha.toDouble(), callback)
 
-	inline fun fill(paint: Paint, callback: () -> Unit) {
+	inline fun fill(paint: Paint, callback: @ViewDslMarker VectorBuilder.() -> Unit) {
 		beginFill(paint)
 		try {
 			callback()
@@ -100,7 +116,7 @@ open class Graphics @JvmOverloads constructor(
 	}
 
 	inline fun stroke(
-		color: RGBA, info: Context2d.StrokeInfo, callback: () -> Unit
+		color: RGBA, info: Context2d.StrokeInfo, callback: @ViewDslMarker VectorBuilder.() -> Unit
 	) = stroke(
 		ColorPaint(color),
 		info, callback
@@ -109,7 +125,7 @@ open class Graphics @JvmOverloads constructor(
 	inline fun stroke(
 		paint: Paint,
 		info: Context2d.StrokeInfo,
-		callback: () -> Unit
+		callback: @ViewDslMarker VectorBuilder.() -> Unit
 	) {
 		beginStroke(paint, info)
 		try {
@@ -123,7 +139,7 @@ open class Graphics @JvmOverloads constructor(
 		fill: Paint,
 		stroke: Paint,
 		strokeInfo: Context2d.StrokeInfo,
-		callback: () -> Unit
+		callback: @ViewDslMarker VectorBuilder.() -> Unit
 	) {
 		beginFillStroke(fill, stroke, strokeInfo)
 		try {
@@ -251,9 +267,9 @@ open class Graphics @JvmOverloads constructor(
                     (bounds.height * renderedAtScaleY).toInt().coerceAtLeast(1)
                 )
                 image.context2d {
-                    scale(renderedAtScaleX, renderedAtScaleY)
-                    translate(-bounds.x, -bounds.y)
-                    compoundShape.draw(this)
+                    scale(this@Graphics.renderedAtScaleX, this@Graphics.renderedAtScaleY)
+                    translate(-this@Graphics.bounds.x, -this@Graphics.bounds.y)
+                    this@Graphics.compoundShape.draw(this)
                 }
                 this.bitmap = image.slice()
             }

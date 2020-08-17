@@ -14,7 +14,7 @@ inline fun Container.ellipse(
     radiusY: Double = 16.0,
     color: RGBA = Colors.WHITE,
     autoScaling: Boolean = true,
-    callback: Ellipse.() -> Unit = {}
+    callback: @ViewDslMarker Ellipse.() -> Unit = {}
 ): Ellipse = Ellipse(radiusX, radiusY, color, autoScaling).addTo(this, callback)
 
 /**
@@ -48,7 +48,7 @@ open class Ellipse(
         clear()
         fill(Colors.WHITE) {
             //ellipse(radiusX, radiusY, radiusX, radiusY)
-            ellipse(0.0, 0.0, radiusX, radiusY)
+            ellipse(0.0, 0.0, this@Ellipse.radiusX, this@Ellipse.radiusY)
         }
     }
 }

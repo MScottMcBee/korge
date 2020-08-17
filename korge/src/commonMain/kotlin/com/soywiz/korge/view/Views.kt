@@ -4,6 +4,7 @@ import com.soywiz.kds.*
 import com.soywiz.kds.iterators.*
 import com.soywiz.klock.*
 import com.soywiz.klock.hr.*
+import com.soywiz.kmem.*
 import com.soywiz.korag.*
 import com.soywiz.korag.log.*
 import com.soywiz.korev.*
@@ -12,6 +13,7 @@ import com.soywiz.korge.annotations.*
 import com.soywiz.korge.input.*
 import com.soywiz.korge.internal.*
 import com.soywiz.korge.render.*
+import com.soywiz.korge.service.storage.*
 import com.soywiz.korge.stat.*
 import com.soywiz.korgw.*
 import com.soywiz.korim.bitmap.*
@@ -41,17 +43,17 @@ class Views constructor(
     val timeProvider: HRTimeProvider,
     val stats: Stats,
     val gameWindow: GameWindow
-) : Extra by Extra.Mixin(), EventDispatcher by EventDispatcher.Mixin(), CoroutineScope, ViewsScope,
+) : Extra by Extra.Mixin(), EventDispatcher by EventDispatcher.Mixin(), CoroutineScope, ViewsScope, ViewsContainer,
 	BoundsProvider, DialogInterface by gameWindow, AsyncCloseable {
+    override val views = this
 
     val keys get() = input.keys
 
-	var imageFormats = RegisteredImageFormats
+    var imageFormats = RegisteredImageFormats
 	val renderContext = RenderContext(ag, this, stats, coroutineContext)
 	val agBitmapTextureManager = renderContext.agBitmapTextureManager
 	var clearEachFrame = true
 	var clearColor: RGBA = Colors.BLACK
-	override val views = this
 	val propsTriggers = hashMapOf<String, (View, String, String) -> Unit>()
 	var clampElapsedTimeTo = HRTimeSpan.fromMilliseconds(100.0)
 
@@ -169,6 +171,7 @@ class Views constructor(
             renderContext.finish()
             agBitmapTextureManager.afterRender()
         }
+        installFpsDebugOverlay()
     }
 
 	fun dumpStats() {
@@ -294,17 +297,18 @@ class Views constructor(
 		val ratioX = targetSize.width.toDouble() / virtualWidth.toDouble()
 		val ratioY = targetSize.height.toDouble() / virtualHeight.toDouble()
 
-		actualVirtualWidth = (actualSize.width / ratioX).toInt()
-		actualVirtualHeight = (actualSize.height / ratioY).toInt()
+		actualVirtualWidth = (actualSize.width / ratioX).toIntRound()
+		actualVirtualHeight = (actualSize.height / ratioY).toIntRound()
 
+        // @TODO: Create a parent to stage that is "invisible" in code but that affect the matrix so we don't adjust stage stuff?
 		stage.scaleX = ratioX
 		stage.scaleY = ratioY
 
-		stage.x = (((actualVirtualWidth - virtualWidth) * anchor.sx) * ratioX).toInt().toDouble()
-		stage.y = (((actualVirtualHeight - virtualHeight) * anchor.sy) * ratioY).toInt().toDouble()
+		stage.x = (((actualVirtualWidth - virtualWidth) * anchor.sx) * ratioX).toIntRound().toDouble()
+		stage.y = (((actualVirtualHeight - virtualHeight) * anchor.sy) * ratioY).toIntRound().toDouble()
 
-		actualVirtualLeft = -(stage.x / ratioX).toInt()
-		actualVirtualTop = -(stage.y / ratioY).toInt()
+		actualVirtualLeft = -(stage.x / ratioX).toIntRound()
+		actualVirtualTop = -(stage.y / ratioY).toIntRound()
 
         resizedEvent.apply {
             this.width = actualSize.width
@@ -321,6 +325,22 @@ class Views constructor(
 
 	fun dispose() {
 	}
+
+    @KorgeInternal
+    fun getWindowBounds(view: View, out: Rectangle = Rectangle()): Rectangle {
+        val bounds = view.getGlobalBounds(out)
+        return bounds.setBounds(
+            globalToWindowX(bounds.left, bounds.top),
+            globalToWindowY(bounds.left, bounds.top),
+            globalToWindowX(bounds.right, bounds.bottom),
+            globalToWindowY(bounds.right, bounds.bottom)
+        )
+    }
+
+    /** Transform global coordinates [x] and [y] into coordinates in the window space X */
+    fun globalToWindowX(x: Double, y: Double): Double = stage.localMatrix.transformX(x, y)
+    /** Transform global coordinates [x] and [y] into coordinates in the window space Y */
+    fun globalToWindowY(x: Double, y: Double): Double = stage.localMatrix.transformY(x, y)
 }
 
 fun viewsLog(callback: suspend Stage.(log: ViewsLog) -> Unit) = Korio {
@@ -340,7 +360,7 @@ class ViewsLog(
 	val stats: Stats = Stats(),
 	val gameWindow: GameWindow = GameWindowLog()
 ) : CoroutineScope {
-	val views = Views(coroutineContext, ag, injector, input, timeProvider, stats, gameWindow)
+	val views = Views(coroutineContext + AsyncInjectorContext(injector), ag, injector, input, timeProvider, stats, gameWindow)
 }
 
 fun Views.texture(bmp: Bitmap, mipmaps: Boolean = false): Texture =
@@ -356,6 +376,11 @@ fun Views.texture(width: Int, height: Int, mipmaps: Boolean = false) =
 
 suspend fun Views.texture(bmp: ByteArray, mipmaps: Boolean = false): Texture =
 	texture(nativeImageFormatProvider.decode(bmp), mipmaps)
+
+@Deprecated("Use ViewsContainer")
+interface ViewsScope {
+    val views: Views
+}
 
 interface ViewsContainer {
 	val views: Views
@@ -449,8 +474,4 @@ interface BoundsProvider {
         override val virtualRight: Double = 0.0
         override val virtualBottom: Double = 0.0
     }
-}
-
-interface ViewsScope {
-    val views: Views
 }

@@ -16,6 +16,79 @@ import kotlin.reflect.*
 
 @OptIn(KorgeInternal::class)
 class MouseEvents(override val view: View) : MouseComponent, Extra by Extra.Mixin() {
+    companion object {
+        var Input.mouseHitSearch by Extra.Property { false }
+        var Input.mouseHitResult by Extra.Property<View?> { null }
+        var Input.mouseHitResultUsed by Extra.Property<View?> { null }
+        var Views.mouseDebugHandlerOnce by Extra.Property { Once() }
+
+        private fun hitTest(views: Views): View? {
+            if (!views.input.mouseHitSearch) {
+                views.input.mouseHitSearch = true
+                views.input.mouseHitResult = views.stage.hitTest(views.nativeMouseX, views.nativeMouseY)
+                //if (frame.mouseHitResult != null) {
+                //val hitResult = frame.mouseHitResult!!
+                //println("BOUNDS: $hitResult : " + hitResult.getLocalBounds() + " : " + hitResult.getGlobalBounds())
+                //hitResult.dump()
+                //}
+            }
+            return views.input.mouseHitResult
+        }
+
+        fun installDebugExtensionOnce(views: Views) {
+            views.mouseDebugHandlerOnce {
+                views.debugHandlers += { ctx ->
+                    val scale = ctx.ag.devicePixelRatio
+                    //val scale = 2.0
+
+                    var yy = 60.toDouble() * scale
+                    val lineHeight = 8.toDouble() * scale
+                    val mouseHit = hitTest(views)
+                    if (mouseHit != null) {
+                        val bounds = mouseHit.getLocalBounds()
+                        renderContext.batch.drawQuad(
+                            ctx.getTex(Bitmaps.white),
+                            x = bounds.x.toFloat(),
+                            y = bounds.y.toFloat(),
+                            width = bounds.width.toFloat(),
+                            height = bounds.height.toFloat(),
+                            colorMul = RGBA(0xFF, 0, 0, 0x3F),
+                            m = mouseHit.globalMatrix
+                        )
+                        renderContext.drawText(
+                            Fonts.defaultFont,
+                            lineHeight.toDouble(),
+                            mouseHit.toString() + " : " + views.nativeMouseX + "," + views.nativeMouseY,
+                            x = 0,
+                            y = yy.toInt()
+                        )
+                        yy += lineHeight
+                    }
+
+                    val mouseHitResultUsed = input.mouseHitResultUsed
+                    if (mouseHitResultUsed != null) {
+                        val bounds = mouseHitResultUsed.getLocalBounds()
+                        renderContext.batch.drawQuad(
+                            ctx.getTex(Bitmaps.white),
+                            x = bounds.x.toFloat(),
+                            y = bounds.y.toFloat(),
+                            width = bounds.width.toFloat(),
+                            height = bounds.height.toFloat(),
+                            colorMul = RGBA(0x00, 0, 0xFF, 0x3F),
+                            m = mouseHitResultUsed.globalMatrix
+                        )
+                        var vview = mouseHitResultUsed
+                        while (vview != null) {
+                            renderContext.drawText(Fonts.defaultFont, lineHeight.toDouble(), vview.toString(), x = 0, y = yy.toInt())
+                            vview = vview?.parent
+                            yy += lineHeight
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @PublishedApi
     internal lateinit var views: Views
     @PublishedApi
@@ -107,11 +180,6 @@ class MouseEvents(override val view: View) : MouseComponent, Extra by Extra.Mixi
 
 	val CLICK_THRESHOLD = 16
 
-	var Input.mouseHitSearch by Extra.Property { false }
-	var Input.mouseHitResult by Extra.Property<View?> { null }
-	var Input.mouseHitResultUsed by Extra.Property<View?> { null }
-	var Views.mouseDebugHandlerOnce by Extra.Property { Once() }
-
     // Global variants (Not related to the STAGE! but to the window coordinates, so can't be translated directly use *Stage variants instead or directly Stage.mouseXY!)
     @KorgeInternal
 	var downPosGlobal = Point()
@@ -163,19 +231,6 @@ class MouseEvents(override val view: View) : MouseComponent, Extra by Extra.Mixi
     val upPos get() = upPosGlobal
 
     var clickedCount = 0
-
-	private fun hitTest(views: Views): View? {
-		if (!views.input.mouseHitSearch) {
-			views.input.mouseHitSearch = true
-			views.input.mouseHitResult = views.stage.hitTest(views.nativeMouseX, views.nativeMouseY)
-			//if (frame.mouseHitResult != null) {
-			//val hitResult = frame.mouseHitResult!!
-			//println("BOUNDS: $hitResult : " + hitResult.getLocalBounds() + " : " + hitResult.getGlobalBounds())
-			//hitResult.dump()
-			//}
-		}
-		return views.input.mouseHitResult
-	}
 
 	val isOver: Boolean get() = hitTest?.hasAncestor(view) ?: false
     lateinit var lastEvent: MouseEvent
@@ -252,51 +307,7 @@ class MouseEvents(override val view: View) : MouseComponent, Extra by Extra.Mixi
 		if (!view.mouseEnabled) return
         this.views = views
 
-		views.mouseDebugHandlerOnce {
-			views.debugHandlers += { ctx ->
-				val mouseHit = hitTest(views)
-				if (mouseHit != null) {
-					val bounds = mouseHit.getLocalBounds()
-					renderContext.batch.drawQuad(
-						ctx.getTex(Bitmaps.white),
-						x = bounds.x.toFloat(),
-						y = bounds.y.toFloat(),
-						width = bounds.width.toFloat(),
-						height = bounds.height.toFloat(),
-						colorMul = RGBA(0xFF, 0, 0, 0x3F),
-						m = mouseHit.globalMatrix
-					)
-					renderContext.drawText(
-						Fonts.defaultFont,
-						16.0,
-						mouseHit.toString() + " : " + views.nativeMouseX + "," + views.nativeMouseY,
-						x = 0,
-						y = 0
-					)
-				}
-
-				val mouseHitResultUsed = input.mouseHitResultUsed
-				if (mouseHitResultUsed != null) {
-					val bounds = mouseHitResultUsed.getLocalBounds()
-					renderContext.batch.drawQuad(
-						ctx.getTex(Bitmaps.white),
-						x = bounds.x.toFloat(),
-						y = bounds.y.toFloat(),
-						width = bounds.width.toFloat(),
-						height = bounds.height.toFloat(),
-						colorMul = RGBA(0x00, 0, 0xFF, 0x3F),
-						m = mouseHitResultUsed.globalMatrix
-					)
-					var vview = mouseHitResultUsed
-					var yy = 16
-					while (vview != null) {
-						renderContext.drawText(Fonts.defaultFont, 16.0, vview.toString(), x = 0, y = yy)
-						vview = vview?.parent
-						yy += 16
-					}
-				}
-			}
-		}
+        installDebugExtensionOnce(views)
 
 		//println("${frame.mouseHitResult}")
 
@@ -364,13 +375,18 @@ internal inline fun <T : View?> T?.doMouseEvent(prop: KProperty1<MouseEvents, Si
     this?.mouse?.let { mouse -> prop.get(mouse).add { launchImmediately(mouse.coroutineContext) { handler(it) } } }
     return this
 }
+@DslMarker
+@Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
+annotation class EventsDslMarker
 
-inline fun <T : View?> T.onClick(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::click, handler)
-inline fun <T : View?> T.onOver(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::over, handler)
-inline fun <T : View?> T.onOut(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::out, handler)
-inline fun <T : View?> T.onDown(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::down, handler)
-inline fun <T : View?> T.onDownFromOutside(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::downFromOutside, handler)
-inline fun <T : View?> T.onUp(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::up, handler)
-inline fun <T : View?> T.onUpOutside(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::upOutside, handler)
-inline fun <T : View?> T.onUpAnywhere(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::upAnywhere, handler)
-inline fun <T : View?> T.onMove(noinline handler: suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::move, handler)
+inline fun <T : View?> T.onClick(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::click, handler)
+inline fun <T : View?> T.onOver(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::over, handler)
+inline fun <T : View?> T.onOut(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::out, handler)
+inline fun <T : View?> T.onDown(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::down, handler)
+inline fun <T : View?> T.onDownFromOutside(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::downFromOutside, handler)
+inline fun <T : View?> T.onUp(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::up, handler)
+inline fun <T : View?> T.onUpOutside(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::upOutside, handler)
+inline fun <T : View?> T.onUpAnywhere(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::upAnywhere, handler)
+inline fun <T : View?> T.onMove(noinline handler: @EventsDslMarker suspend (MouseEvents) -> Unit) = doMouseEvent(MouseEvents::move, handler)
+
+fun ViewsScope.installMouseDebugExtensionOnce() = MouseEvents.installDebugExtensionOnce(views)

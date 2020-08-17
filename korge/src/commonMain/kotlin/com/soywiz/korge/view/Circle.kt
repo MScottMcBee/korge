@@ -13,7 +13,7 @@ inline fun Container.circle(
     radius: Double = 16.0,
     color: RGBA = Colors.WHITE,
     autoScaling: Boolean = true,
-    callback: Circle.() -> Unit = {}
+    callback: @ViewDslMarker Circle.() -> Unit = {}
 ): Circle = Circle(radius, color, autoScaling).addTo(this, callback)
 
 /**
@@ -44,7 +44,7 @@ open class Circle(
     private fun updateGraphics() {
         clear()
         fill(Colors.WHITE) {
-            circle(radius, radius, radius)
+            circle(this@Circle.radius, this@Circle.radius, this@Circle.radius)
         }
     }
 }

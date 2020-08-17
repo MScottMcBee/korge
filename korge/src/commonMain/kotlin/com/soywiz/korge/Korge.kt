@@ -11,6 +11,7 @@ import com.soywiz.korge.internal.*
 import com.soywiz.korge.logger.*
 import com.soywiz.korge.resources.*
 import com.soywiz.korge.scene.*
+import com.soywiz.korge.service.storage.*
 import com.soywiz.korge.stat.*
 import com.soywiz.korge.time.*
 import com.soywiz.korge.view.*
@@ -97,7 +98,7 @@ object Korge {
 		gameWindow: GameWindow? = null,
         timeProvider: HRTimeProvider = HRTimeProvider,
         injector: AsyncInjector = AsyncInjector(),
-        entry: suspend Stage.() -> Unit
+        entry: @ViewDslMarker suspend Stage.() -> Unit
 	) {
         if (!OS.isJsBrowser) {
             configureLoggerFromProperties(localCurrentDirVfs["klogger.properties"])
@@ -128,21 +129,12 @@ object Korge {
 
             // Use this once Korgw is on 1.12.5
             //val views = Views(gameWindow.getCoroutineDispatcherWithCurrentContext() + SupervisorJob(), ag, injector, input, timeProvider, stats, gameWindow)
-            val views = Views(coroutineContext + gameWindow.coroutineDispatcher + SupervisorJob(), ag, injector, input, timeProvider, stats, gameWindow)
+            val views = Views(coroutineContext + gameWindow.coroutineDispatcher + AsyncInjectorContext(injector) + SupervisorJob(), ag, injector, input, timeProvider, stats, gameWindow)
 
             if (OS.isJsBrowser) KDynamic { global["views"] = views }
             injector
-                .mapInstance(AG::class, ag)
-                .mapInstance(TimeProvider::class, timeProvider.toTimeProvider()) // Deprecated
-                .mapInstance(HRTimeProvider::class, timeProvider)
-                .mapInstance(views)
-                .mapInstance(input)
-                .mapInstance(stats)
                 .mapInstance(ModuleArgs(args))
-                .mapInstance(CoroutineContext::class, views.coroutineContext)
                 .mapInstance(GameWindow::class, gameWindow)
-                .mapSingleton(ResourcesRoot::class) { ResourcesRoot() }
-                .mapPrototype(EmptyScene::class) { EmptyScene() }
                 .mapInstance<Module>(object : Module() {
                     override val title = title
                     override val fullscreen: Boolean? = fullscreen
@@ -191,6 +183,17 @@ object Korge {
         bgcolor: RGBA = Colors.TRANSPARENT_BLACK,
         fixedSizeStep: TimeSpan = TimeSpan.NULL
     ): CompletableDeferred<Unit> {
+        val injector = views.injector
+        injector.mapInstance(views)
+        injector.mapInstance(views.ag)
+        injector.mapSingleton(ResourcesRoot::class) { ResourcesRoot() }
+        injector.mapInstance(views.input)
+        injector.mapInstance(views.stats)
+        injector.mapInstance(CoroutineContext::class, views.coroutineContext)
+        injector.mapPrototype(EmptyScene::class) { EmptyScene() }
+        injector.mapInstance(TimeProvider::class, views.timeProvider.toTimeProvider()) // Deprecated
+        injector.mapInstance(HRTimeProvider::class, views.timeProvider)
+
         val input = views.input
         val ag = views.ag
         val downPos = Point()
@@ -415,7 +418,7 @@ object Korge {
         fixedSizeStep: TimeSpan = TimeSpan.NULL,
         waitForFirstRender: Boolean = true
     ) {
-       val firstRenderDeferred = prepareViewsBase(views, eventDispatcher, clearEachFrame, bgcolor, fixedSizeStep)
+        val firstRenderDeferred = prepareViewsBase(views, eventDispatcher, clearEachFrame, bgcolor, fixedSizeStep)
         if (waitForFirstRender) {
             firstRenderDeferred.await()
         }

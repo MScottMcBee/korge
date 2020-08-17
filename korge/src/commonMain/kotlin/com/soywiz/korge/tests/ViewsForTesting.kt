@@ -1,9 +1,10 @@
 package com.soywiz.korge.tests
 
+import com.soywiz.kds.*
 import com.soywiz.kds.iterators.*
-import com.soywiz.kds.mapWhile
 import com.soywiz.klock.*
 import com.soywiz.klock.hr.*
+import com.soywiz.klock.milliseconds
 import com.soywiz.korag.log.*
 import com.soywiz.korev.*
 import com.soywiz.korge.*
@@ -21,31 +22,54 @@ import kotlinx.coroutines.*
 import kotlin.coroutines.*
 import kotlin.jvm.*
 import kotlin.math.max
+import kotlin.time.*
 
-open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 10.milliseconds, val size: SizeInt = SizeInt(640, 480), val log: Boolean = false) {
+open class ViewsForTesting @JvmOverloads constructor(
+    val frameTime: TimeSpan = 10.milliseconds,
+    val windowSize: SizeInt = SizeInt(DefaultViewport.WIDTH, DefaultViewport.HEIGHT),
+    val virtualSize: SizeInt = SizeInt(windowSize.size.clone()),
+    val log: Boolean = false
+) {
 	val startTime = DateTime(0.0)
 	var time = startTime
 	val elapsed get() = time - startTime
-	//val dispatcher2 = TestCoroutineDispatcher(frameTime)
-	//val dispatcher = Dispatchers.Default
 
 	val timeProvider: TimeProvider = object : TimeProvider {
 		override fun now(): DateTime = time
 	}
-	val koruiEventDispatcher = EventDispatcher()
 	val dispatcher = FastGameWindowCoroutineDispatcher()
-	val gameWindow = object : GameWindowLog() {
-		override val coroutineDispatcher = dispatcher
-	}
-	val viewsLog = ViewsLog(dispatcher, ag = if (log) LogAG(DefaultViewport.WIDTH, DefaultViewport.HEIGHT) else DummyAG(DefaultViewport.WIDTH, DefaultViewport.HEIGHT), gameWindow = gameWindow)
+    class TestGameWindow(initialSize: SizeInt, val dispatcher: FastGameWindowCoroutineDispatcher) : GameWindowLog() {
+        override var width: Int = initialSize.width
+        override var height: Int = initialSize.height
+        override val coroutineDispatcher = dispatcher
+    }
+
+	val gameWindow = TestGameWindow(windowSize, dispatcher)
+    val ag = if (log) LogAG(windowSize.width, windowSize.height) else DummyAG(windowSize.width, windowSize.height)
+	val viewsLog = ViewsLog(gameWindow, ag = ag, gameWindow = gameWindow).also { viewsLog ->
+        viewsLog.views.virtualWidth = virtualSize.width
+        viewsLog.views.virtualHeight = virtualSize.height
+    }
 	val injector get() = viewsLog.injector
-	val ag get() = viewsLog.ag
     val logAg get() = ag as? LogAG?
+    val dummyAg get() = ag as? DummyAG?
 	val input get() = viewsLog.input
 	val views get() = viewsLog.views
     val stage get() = views.stage
 	val stats get() = views.stats
 	val mouse get() = input.mouse
+
+    fun resizeGameWindow(width: Int, height: Int, scaleMode: ScaleMode = views.scaleMode, scaleAnchor: Anchor = views.scaleAnchor) {
+        logAg?.backWidth = width
+        logAg?.backHeight = height
+        dummyAg?.backWidth = width
+        dummyAg?.backHeight = height
+        gameWindow.width = width
+        gameWindow.height = height
+        views.scaleAnchor = scaleAnchor
+        views.scaleMode = scaleMode
+        gameWindow.dispatchReshapeEvent(0, 0, width, height)
+    }
 
     suspend fun <T> deferred(block: suspend (CompletableDeferred<T>) -> Unit): T {
         val deferred = CompletableDeferred<T>()
@@ -62,7 +86,7 @@ open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 1
     }
 
     suspend fun mouseMoveTo(x: Int, y: Int) {
-        koruiEventDispatcher.dispatch(MouseEvent(type = MouseEvent.Type.MOVE, id = 0, x = x, y = y))
+        gameWindow.dispatch(MouseEvent(type = MouseEvent.Type.MOVE, id = 0, x = x, y = y))
         //views.update(frameTime)
         simulateFrame(count = 2)
     }
@@ -98,7 +122,7 @@ open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 1
             false -> mouseButtons and (1 shl button.id).inv()
             else -> mouseButtons
         }
-        koruiEventDispatcher.dispatch(
+        gameWindow.dispatch(
             MouseEvent(
                 type = type,
                 id = 0,
@@ -163,22 +187,22 @@ open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 1
 	}
 
 	// @TODO: Run a faster eventLoop where timers happen much faster
-	fun viewsTest(timeout: TimeSpan? = DEFAULT_SUSPEND_TEST_TIMEOUT, block: suspend Stage.() -> Unit): Unit = suspendTest(timeout = timeout, cond = { !OS.isNative }) {
-        Korge.prepareViewsBase(views, koruiEventDispatcher, fixedSizeStep = frameTime)
+	fun viewsTest(timeout: TimeSpan? = DEFAULT_SUSPEND_TEST_TIMEOUT, frameTime: TimeSpan = this.frameTime, block: suspend Stage.() -> Unit): Unit = suspendTest(timeout = timeout, cond = { !OS.isNative && !OS.isAndroid }) {
+        Korge.prepareViewsBase(views, gameWindow, fixedSizeStep = frameTime)
 
 		injector.mapInstance<Module>(object : Module() {
 			override val title = "KorgeViewsForTesting"
-			override val size = this@ViewsForTesting.size
-			override val windowSize = this@ViewsForTesting.size
+			override val size = this@ViewsForTesting.windowSize
+			override val windowSize = this@ViewsForTesting.windowSize
 		})
 
 		var completed = false
 		var completedException: Throwable? = null
 
 		this@ViewsForTesting.dispatcher.dispatch(coroutineContext, Runnable {
-			launchImmediately(dispatcher) {
+			launchImmediately(views.coroutineContext + dispatcher) {
 				try {
-					block(views.stage)
+                    block(views.stage)
 				} catch (e: Throwable) {
 					completedException = e
 				} finally {
@@ -189,6 +213,7 @@ open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 1
 
 		withTimeout(timeout ?: TimeSpan.NULL) {
 			while (!completed) {
+                //println("FRAME")
 				simulateFrame()
 				dispatcher.executePending()
 			}
@@ -216,28 +241,65 @@ open class ViewsForTesting @JvmOverloads constructor(val frameTime: TimeSpan = 1
 		}
 	}
 
-	inner class FastGameWindowCoroutineDispatcher : GameWindowCoroutineDispatcher() {
-		val hasMore get() = timedTasks.isNotEmpty() || tasks.isNotEmpty()
+    class TimedTask2(val time: DateTime, val continuation: CancellableContinuation<Unit>?, val callback: Runnable?) {
+        var exception: Throwable? = null
+        override fun toString(): String = "${time.unixMillisLong}"
+    }
+
+    inner class FastGameWindowCoroutineDispatcher : GameWindowCoroutineDispatcher() {
+		val hasMore get() = timedTasks2.isNotEmpty() || tasks.isNotEmpty()
 
 		override fun now() = time.unixMillisDouble.hrMilliseconds
 
-		override fun executePending() {
-			//println("executePending.hasMore=$hasMore")
-			try {
-				val timedTasks = mapWhile({ timedTasks.isNotEmpty() }) { timedTasks.removeHead() }
+        val timedTasks2 = TGenPriorityQueue<TimedTask2> { a, b -> a.time.compareTo(b.time) }
 
-				timedTasks.fastForEach { item ->
-					time = DateTime.fromUnix(max(time.unixMillis, item.time.millisecondsDouble))
-					if (item.exception != null) {
-						item.continuation?.resumeWithException(item.exception!!)
-						if (item.callback != null) {
-							item.exception?.printStackTrace()
-						}
-					} else {
-						item.continuation?.resume(Unit)
-						item.callback?.run()
-					}
-				}
+        override fun invokeOnTimeout(timeMillis: Long, block: Runnable): DisposableHandle {
+            //println("invokeOnTimeout: $timeMillis")
+            val task = TimedTask2(time + timeMillis.toDouble().milliseconds, null, block)
+            timedTasks2.add(task)
+            return object : DisposableHandle {
+                override fun dispose() {
+                    timedTasks2.remove(task)
+                }
+            }
+        }
+
+        override fun scheduleResumeAfterDelay(timeMillis: Long, continuation: CancellableContinuation<Unit>) {
+            //println("scheduleResumeAfterDelay: $timeMillis")
+            val task = TimedTask2(time + timeMillis.toDouble().milliseconds, continuation, null)
+            continuation.invokeOnCancellation {
+                task.exception = it
+            }
+            timedTasks2.add(task)
+        }
+
+        override fun executePending() {
+			//println("executePending.hasMore=$hasMore")
+            var skippingFrames = 0
+			try {
+                // Skip time after several frames without activity
+                if (tasks.isEmpty() && timedTasks2.isNotEmpty()) {
+                    skippingFrames++
+                    if (skippingFrames >= 100) {
+                        time = timedTasks2.head.time
+                    }
+                } else {
+                    skippingFrames = 0
+                }
+
+                while (timedTasks2.isNotEmpty() && time >= timedTasks2.head.time) {
+                    val item = timedTasks2.removeHead()
+                    //println("TIME[${time.unixMillisLong}]: TIMED TASK. Executing: $item")
+                    if (item.exception != null) {
+                        item.continuation?.resumeWithException(item.exception!!)
+                        if (item.callback != null) {
+                            item.exception?.printStackTrace()
+                        }
+                    } else {
+                        item.continuation?.resume(Unit)
+                        item.callback?.run()
+                    }
+                }
 
 				while (tasks.isNotEmpty()) {
 					val task = tasks.dequeue()

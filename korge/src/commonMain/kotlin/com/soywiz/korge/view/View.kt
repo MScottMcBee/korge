@@ -16,6 +16,7 @@ import com.soywiz.korim.vector.*
 import com.soywiz.korio.lang.*
 import com.soywiz.korio.util.*
 import com.soywiz.korio.util.encoding.*
+import com.soywiz.korma.annotations.*
 import com.soywiz.korma.geom.*
 import com.soywiz.korma.geom.shape.*
 import com.soywiz.korma.geom.vector.*
@@ -23,10 +24,6 @@ import kotlin.collections.set
 import kotlin.math.*
 import kotlin.native.concurrent.*
 import kotlin.reflect.*
-
-@DslMarker
-@Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
-annotation class ViewsDslMarker
 
 @Deprecated("", replaceWith = ReplaceWith("View"))
 typealias DisplayObject = View
@@ -117,6 +114,7 @@ abstract class View internal constructor(
     }
 
     open var hitShape: VectorPath? = null
+    open var hitShapes: List<VectorPath>? = null
 
     companion object {
         //private val identity = Matrix()
@@ -1022,9 +1020,12 @@ abstract class View internal constructor(
         //println("lx=$lx,ly=$ly")
         //println("localBounds:$bounds")
 
-
-        if (hitTestUsingShapes == true || (hitTestUsingShapes == null && hitShape != null)) {
-            return if (hitShape!!.containsPoint(lx, ly)) this else null
+        val hitShape = this.hitShape
+        val hitShapes = this.hitShapes
+        if (hitTestUsingShapes == true || (hitTestUsingShapes == null && (hitShape != null || hitShapes != null))) {
+            hitShapes?.fastForEach { if (it.containsPoint(lx, ly)) return this }
+            if (hitShape != null && hitShape.containsPoint(lx, ly)) return this
+            return null
         } else {
             return this
         }
@@ -1475,7 +1476,22 @@ fun <T : View> T.onNextFrame(updatable: T.(views: Views) -> Unit) {
  * Returns the number of ancestors of this view.
  * Views without parents return 0.
  */
-val View?.ancestorCount: Int get() = this?.parent?.ancestorCount?.plus(1) ?: 0
+// @TODO: This should be computed and invalidated when a view is attached to a container
+val View?.ancestorCount: Int get() {
+    var count = 0
+    var node = this
+    while (node != null) {
+        node = node.parent
+        if (node != null) {
+            count++
+        }
+    }
+    return count
+    /*
+    val parent = parent ?: return 0
+    return parent.ancestorCount + 1
+     */
+}
 
 /**
  * Returns a list of all the ancestors including this in order to reach from this view to the [target] view,
@@ -1569,11 +1585,7 @@ inline fun <T : View> T.position(point: IPoint): T = position(point.x, point.y)
 inline fun <T : View> T.visible(visible: Boolean): T = this.also { it.visible = visible }
 inline fun <T : View> T.name(name: String?): T = this.also { it.name = name }
 
-@DslMarker
-@Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
-annotation class VectorBuilderDslMarker
-
-inline fun <T : View> T.hitShape(crossinline block: @VectorBuilderDslMarker VectorBuilder.() -> Unit): T {
+inline fun <T : View> T.hitShape(crossinline block: @ViewDslMarker VectorBuilder.() -> Unit): T {
     buildPath { block() }.also {
         this.hitShape = it
     }
@@ -1679,13 +1691,13 @@ fun <T : View> T.centerBetween(x1: Double, y1: Double, x2: Double, y2: Double): 
  * Chainable method returning this that sets [View.x] so that
  * [this] View is centered on the [other] View horizontally
  */
-fun <T : View> T.centerXOn(other: View): T = this.centerXBetween(other.x, other.x + other.width)
+fun <T : View> T.centerXOn(other: View): T = this.alignX(other, 0.5, true)
 
 /**
  * Chainable method returning this that sets [View.y] so that
  * [this] View is centered on the [other] View vertically
  */
-fun <T : View> T.centerYOn(other: View): T = this.centerYBetween(other.y, other.y + other.height)
+fun <T : View> T.centerYOn(other: View): T = this.alignY(other, 0.5, true)
 
 /**
  * Chainable method returning this that sets [View.x] and [View.y]
@@ -1693,8 +1705,8 @@ fun <T : View> T.centerYOn(other: View): T = this.centerYBetween(other.y, other.
  */
 fun <T : View> T.centerOn(other: View): T = this.centerXOn(other).centerYOn(other)
 
-fun <T : View> T.centerXOnStage(): T = this.centerXBetween(0.0, stage!!.views.virtualWidth.toDouble())
-fun <T : View> T.centerYOnStage(): T = this.centerYBetween(0.0, stage!!.views.virtualHeight.toDouble())
+fun <T : View> T.centerXOnStage(): T = this.centerXOn(root)
+fun <T : View> T.centerYOnStage(): T = this.centerYOn(root)
 fun <T : View> T.centerOnStage(): T = this.centerXOnStage().centerYOnStage()
 
 fun <T : View> T.alignXY(other: View, ratio: Double, inside: Boolean, doX: Boolean, padding: Double = 0.0): T {
@@ -1706,9 +1718,9 @@ fun <T : View> T.alignXY(other: View, ratio: Double, inside: Boolean, doX: Boole
     val rratioM1_1 = if (inside) ratioM1_1 else -ratioM1_1
     val iratio = if (inside) ratio else 1.0 - ratio
     if (doX) {
-        x = (bounds.x + (bounds.width * ratio)) - (width * iratio) - (padding * rratioM1_1)
+        x = (bounds.x + (bounds.width * ratio)) - (this.scaledWidth * iratio) - (padding * rratioM1_1)
     } else {
-        y = (bounds.y + (bounds.height * ratio)) - (height * iratio) - (padding * rratioM1_1)
+        y = (bounds.y + (bounds.height * ratio)) - (this.scaledHeight * iratio) - (padding * rratioM1_1)
     }
     return this
 }
@@ -1874,3 +1886,7 @@ inline fun <T : View> T.alignBottomToTopOf(other: View, padding: Number): T =
 @Deprecated("Kotlin/Native boxes inline+Number")
 inline fun <T : View> T.alignBottomToBottomOf(other: View, padding: Number): T =
     alignBottomToBottomOf(other, padding.toDouble())
+
+@Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS) annotation class ViewDslMarker
+// @TODO: This causes issues having to put some explicit this@ when it shouldn't be required
+//typealias ViewDslMarker = KorDslMarker
